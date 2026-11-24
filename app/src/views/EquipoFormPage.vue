@@ -96,6 +96,14 @@ const listaCategorias = ref<Categoria[]>([]);
 const estadoActual = ref<Estado>('disponible');
 const errores = ref<Record<string, string>>({});
 
+function volverALista() {
+  if (ionRouter.canGoBack()) {
+    ionRouter.back();
+  } else {
+    ionRouter.navigate('/tabs/equipos', 'back', 'replace');
+  }
+}
+
 /**
  * TODO [M5] Al entrar a la página:
  *  - Cargar las categorías para el ion-select (categorias()).
@@ -106,7 +114,36 @@ const errores = ref<Record<string, string>>({});
  */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+  Object.assign(datos, vacio());
+  estadoActual.value = 'disponible';
+
+  try {
+    if (props.id) {
+      const [cats, equipo] = await Promise.all([categorias(), obtener(props.id)]);
+      listaCategorias.value = cats;
+      estadoActual.value = equipo.estado;
+      Object.assign(datos, {
+        codigo: equipo.codigo,
+        nombre: equipo.nombre,
+        categoria_id: equipo.categoria.id,
+        estado: equipo.estado === 'prestado' ? undefined : equipo.estado,
+        fecha_adquisicion: equipo.fecha_adquisicion,
+        costo_interno: null,
+      });
+    } else {
+      listaCategorias.value = await categorias();
+    }
+  } catch (err) {
+    if (err instanceof ErrorApi && err.status === 401) {
+      return;
+    }
+    if (err instanceof ErrorApi && err.status === 404) {
+      mostrarToast('El equipo ya no existe.', 'warning');
+      volverALista();
+      return;
+    }
+    mostrarToast('No fue posible cargar la información del formulario.', 'danger');
+  }
 });
 
 /**
@@ -120,6 +157,57 @@ onIonViewWillEnter(async () => {
  *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
  */
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+  const cargando = await loadingController.create({ message: 'Guardando…' });
+  await cargando.present();
+
+  let guardado = false;
+  let noExiste = false;
+
+  try {
+    const textoCosto =
+      datos.costo_interno === null || datos.costo_interno === undefined
+        ? ''
+        : String(datos.costo_interno).trim();
+    const costoNumerico = textoCosto === '' ? null : Number(textoCosto);
+
+    const cuerpo: DatosEquipo = {
+      codigo: datos.codigo.trim().toUpperCase(),
+      nombre: datos.nombre.trim(),
+      categoria_id: datos.categoria_id,
+      fecha_adquisicion: datos.fecha_adquisicion,
+      costo_interno: costoNumerico,
+      ...(estadoActual.value !== 'prestado' ? { estado: datos.estado } : {}),
+    };
+
+    if (props.id) {
+      await actualizar(props.id, cuerpo);
+    } else {
+      await crear(cuerpo);
+    }
+    guardado = true;
+  } catch (err) {
+    if (err instanceof ErrorApi && err.status === 401) {
+      return;
+    }
+    if (err instanceof ErrorApi && err.status === 422) {
+      errores.value = err.erroresPorCampo;
+    } else if (err instanceof ErrorApi && err.status === 404) {
+      noExiste = true;
+      mostrarToast('El equipo ya no existe.', 'warning');
+    } else {
+      mostrarToast('No fue posible guardar el equipo.', 'danger');
+    }
+  } finally {
+    await cargando.dismiss();
+  }
+
+  if (guardado) {
+    await vibrar();
+    mostrarToast(props.id ? 'Equipo actualizado.' : 'Equipo registrado.', 'success');
+    volverALista();
+  } else if (noExiste) {
+    volverALista();
+  }
 }
 </script>
